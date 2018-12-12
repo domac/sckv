@@ -15,14 +15,41 @@ var (
 	ErrProtocolFormat = errors.New("redis protocol format error")
 	ErrProtocolEnd    = errors.New("redis protocol end error")
 	ErrReaderNull     = errors.New("redis null error")
+	OK                = []byte("+OK\r\n")
+	PONG              = []byte("+PONG\r\n")
 )
 
 type RedisCmd struct {
 	Args [][]byte
 }
 
-//命令对象
-type RequestCmd struct {
+//命令响应对象写入器
+type ResponseCmdWriter struct {
+	writer io.Writer
+	buf    []byte
+}
+
+func NewResponseCmdWriter(writer io.Writer) *ResponseCmdWriter {
+	return &ResponseCmdWriter{
+		writer: writer,
+	}
+}
+
+func (rsp *ResponseCmdWriter) Flush() error {
+	if _, err := rsp.writer.Write(rsp.buf); err != nil {
+		return err
+	}
+	rsp.buf = rsp.buf[:0]
+	return nil
+}
+
+func (rsp *ResponseCmdWriter) WriteOK() error {
+	_, err := rsp.writer.Write(OK)
+	return err
+}
+
+//命令请求对象读取器
+type RequestCmdReader struct {
 	reader io.Reader
 	buf    []byte
 	head   int
@@ -30,15 +57,15 @@ type RequestCmd struct {
 }
 
 //创建请求命令
-func NewRequestCmd(reader io.Reader) *RequestCmd {
-	return &RequestCmd{
+func NewRequestCmdReader(reader io.Reader) *RequestCmdReader {
+	return &RequestCmdReader{
 		reader: bufio.NewReader(reader),
 		buf:    make([]byte, MAX_REQ_READ_LEN),
 	}
 }
 
 //命令解析
-func (req *RequestCmd) ParseCommand() (redisCmds []RedisCmd, err error) {
+func (req *RequestCmdReader) ParseCommand() (redisCmds []RedisCmd, err error) {
 
 	buf := req.buf[req.head:req.tail] //读取命令行数据
 
@@ -47,6 +74,7 @@ func (req *RequestCmd) ParseCommand() (redisCmds []RedisCmd, err error) {
 		req.head = 0
 		req.tail = 0
 	}
+
 	//有数据的情况
 	if len(buf) > 0 {
 	FORWARD:
@@ -137,7 +165,7 @@ func (req *RequestCmd) ParseCommand() (redisCmds []RedisCmd, err error) {
 }
 
 //请求缓冲区增长
-func (req *RequestCmd) tryGrow() {
+func (req *RequestCmdReader) tryGrow() {
 	if req.tail >= len(req.buf) {
 		if req.tail-req.head == 0 {
 			req.head = 0
@@ -149,7 +177,7 @@ func (req *RequestCmd) tryGrow() {
 }
 
 //扩展缓冲区
-func (req *RequestCmd) grow() {
+func (req *RequestCmdReader) grow() {
 	newBuff := make([]byte, len(req.buf)*2)
 	copy(newBuff, req.buf)
 	req.buf = newBuff

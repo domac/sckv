@@ -9,40 +9,55 @@ import (
 func TestSimpleSetCommand(t *testing.T) {
 	cmd := "*3\r\n$3\r\nSET\r\n$5\r\nmykey\r\n$7\r\nmyvalue\r\n"
 	br := bytes.NewReader([]byte(cmd))
-	reqCmd := NewRequestCmd(br)
+	reqCmd := NewRequestCmdReader(br)
 	cmds, err := reqCmd.ParseCommand()
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	if len(cmds) != 1 {
+		t.Fail()
+	}
+
 	t.Logf("cmds: %s\n", cmds)
 }
 
 func TestSimpleGetCommand(t *testing.T) {
 	cmd := "*2\r\n$3\r\nGET\r\n$5\r\nmykey\r\n"
 	br := bytes.NewReader([]byte(cmd))
-	reqCmd := NewRequestCmd(br)
+	reqCmd := NewRequestCmdReader(br)
 	cmds, err := reqCmd.ParseCommand()
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	if len(cmds) != 1 {
+		t.Fail()
+	}
+
 	t.Logf("cmds: %s\n", cmds)
 }
 
 func TestSimpleExpireCommand(t *testing.T) {
 	cmd := "*3\r\n$6\r\nEXPIRE\r\n$5\r\nmykey\r\n$2\r\n30\r\n"
 	br := bytes.NewReader([]byte(cmd))
-	reqCmd := NewRequestCmd(br)
+	reqCmd := NewRequestCmdReader(br)
 	cmds, err := reqCmd.ParseCommand()
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	if len(cmds) != 1 {
+		t.Fail()
+	}
+
 	t.Logf("cmds: %s\n", cmds)
 }
 
 func TestSimpleGetPipelineCommand(t *testing.T) {
 	cmd := "*2\r\n$3\r\nGET\r\n$11\r\nmykey123456\r\n*2\r\n$3\r\nGET\r\n$5\r\nmyCmd\r\n*2\r\n$3\r\nGET\r\n$11\r\nmykey123456\r\n*2\r\n$3\r\nGET\r\n$5\r\nmyCmd\r\n*2\r\n$3\r\nGET\r\n$11\r\nmykey123456\r\n*2\r\n$3\r\nGET\r\n$5\r\nmyCmd\r\n"
 	br := bytes.NewReader([]byte(cmd))
-	reqCmd := NewRequestCmd(br)
+	reqCmd := NewRequestCmdReader(br)
 	cmds, err := reqCmd.ParseCommand()
 	if err != nil {
 		t.Fatal(err)
@@ -53,12 +68,22 @@ func TestSimpleGetPipelineCommand(t *testing.T) {
 	t.Logf("cmds: %s\n", cmds)
 }
 
+func TestSimpleRespWriterWriteOK(t *testing.T) {
+	buf := make([]byte, 0)
+	bw := bytes.NewBuffer(buf)
+	respwriter := NewResponseCmdWriter(bw)
+	respwriter.WriteOK()
+	if !bytes.Equal(bw.Bytes(), OK) {
+		t.Fail()
+	}
+}
+
 func BenchmarkGetCommand(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			cmd := "*2\r\n$3\r\nGET\r\n$5\r\nmykey\r\n"
 			br := bytes.NewReader([]byte(cmd))
-			reqCmd := NewRequestCmd(br)
+			reqCmd := NewRequestCmdReader(br)
 			_, err := reqCmd.ParseCommand()
 			if err != nil {
 				b.Error(err)
