@@ -10,18 +10,27 @@ import (
 
 var CONN_ERROR error = errors.New("STOP LISTENING")
 
+const (
+	default_server_max_connects = 1024
+)
+
 //会话对象
 type Session struct {
 	conn   *net.TCPConn
 	reader *RequestCmdReader
 	writer *ResponseCmdWriter
+
+	//连接释放回调
+	releaseOnce sync.Once
+	release     func()
 }
 
-func NewSession(conn *net.TCPConn) *Session {
+func NewSession(conn *net.TCPConn, release func()) *Session {
 	return &Session{
-		conn:   conn,
-		reader: NewRequestCmdReader(conn),
-		writer: NewResponseCmdWriter(conn),
+		conn:    conn,
+		reader:  NewRequestCmdReader(conn),
+		writer:  NewResponseCmdWriter(conn),
+		release: release,
 	}
 }
 
@@ -30,12 +39,27 @@ func (sess *Session) RemoteAddr() string {
 	return sess.conn.RemoteAddr().String()
 }
 
-func (sess *Session) GetReader() *RequestCmdReader {
-	return sess.reader
+func (sess *Session) Receive() ([]RedisCmd, error) {
+	cmds, err := sess.reader.ParseCommand()
+	if err != nil {
+		sess.Close()
+	}
+	return cmds, err
 }
 
-func (sess *Session) GetWriter() *ResponseCmdWriter {
-	return sess.writer
+func (sess *Session) WriteOK() error {
+	err := sess.writer.WriteOK()
+	if err != nil {
+		sess.Close()
+	}
+	return err
+}
+
+//会话关闭
+func (sess *Session) Close() error {
+	err := sess.conn.Close()
+	sess.releaseOnce.Do(sess.release)
+	return err
 }
 
 type ReqHandler interface {
@@ -50,20 +74,27 @@ func (hf HandlerFunc) HandleSession(session *Session) {
 
 //请求服务
 type Server struct {
-	mu         sync.Mutex
-	handler    ReqHandler
-	hostport   string
-	keepalive  time.Duration
-	stopChan   chan bool
-	isShutdown bool
+	mu          sync.Mutex
+	handler     ReqHandler
+	hostport    string
+	keepalive   time.Duration
+	stopChan    chan bool
+	isShutdown  bool
+	maxconnects int
 }
 
-func NewServer(addr string, handler ReqHandler) *Server {
+func NewServer(addr string, handler ReqHandler, maxconnects int) *Server {
+
+	if maxconnects <= 0 {
+		maxconnects = default_server_max_connects
+	}
+
 	return &Server{
-		hostport:  addr,
-		handler:   handler,
-		stopChan:  make(chan bool, 1),
-		keepalive: 5 * time.Minute,
+		hostport:    addr,
+		handler:     handler,
+		stopChan:    make(chan bool, 1),
+		keepalive:   5 * time.Minute,
+		maxconnects: maxconnects,
 	}
 }
 
@@ -79,7 +110,7 @@ func (svr *Server) ListenAndServe() error {
 		return err
 	}
 
-	tcpListener := &TcpListener{listener, svr.stopChan, svr.keepalive}
+	tcpListener := NewTcpListener(listener, svr.stopChan, svr.keepalive, svr.maxconnects)
 
 	svr.serve(tcpListener)
 	return nil
@@ -87,13 +118,11 @@ func (svr *Server) ListenAndServe() error {
 
 func (svr *Server) serve(ln *TcpListener) {
 	for !svr.isShutdown {
-		conn, err := ln.Accept()
+		sess, err := ln.Accept()
 		if err != nil {
 			log.Printf("server accept error: %s\n", err.Error())
 			continue
 		}
-
-		sess := NewSession(conn)
 		go svr.handler.HandleSession(sess)
 	}
 }
@@ -109,13 +138,29 @@ type TcpListener struct {
 	*net.TCPListener
 	stop      chan bool
 	keepalive time.Duration
+	sem       chan struct{}
 }
 
-func (ln *TcpListener) Accept() (*net.TCPConn, error) {
+func NewTcpListener(l *net.TCPListener, stopchan chan bool, keepalive time.Duration, n int) *TcpListener {
+	return &TcpListener{l, stopchan, keepalive, make(chan struct{}, n)}
+}
+
+func (ln *TcpListener) acquire() {
+	ln.sem <- struct{}{}
+}
+
+func (ln *TcpListener) release() {
+	<-ln.sem
+}
+
+//accept 处理
+func (ln *TcpListener) Accept() (*Session, error) {
+	ln.acquire()
 	for {
 		conn, err := ln.AcceptTCP()
 		select {
 		case <-ln.stop:
+			ln.release()
 			return nil, CONN_ERROR
 		default:
 			//do nothing
@@ -124,8 +169,9 @@ func (ln *TcpListener) Accept() (*net.TCPConn, error) {
 			conn.SetKeepAlive(true)
 			conn.SetKeepAlivePeriod(ln.keepalive)
 		} else {
+			ln.release()
 			return nil, err
 		}
-		return conn, err
+		return NewSession(conn, ln.release), err
 	}
 }
