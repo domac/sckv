@@ -55,6 +55,14 @@ func (sess *Session) WriteOK() error {
 	return err
 }
 
+func (sess *Session) WriteValue(val []byte) error {
+	err := sess.writer.WriteValue(val)
+	if err != nil {
+		sess.Close()
+	}
+	return err
+}
+
 //会话关闭
 func (sess *Session) Close() error {
 	err := sess.conn.Close()

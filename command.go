@@ -48,6 +48,11 @@ func (rsp *ResponseCmdWriter) WriteOK() error {
 	return err
 }
 
+func (rsp *ResponseCmdWriter) WriteValue(val []byte) error {
+	_, err := rsp.writer.Write([]byte("+" + string(val) + "\r\n"))
+	return err
+}
+
 //命令请求对象读取器
 type RequestCmdReader struct {
 	reader io.Reader
@@ -89,7 +94,7 @@ func (req *RequestCmdReader) ParseCommand() (redisCmds []RedisCmd, err error) {
 						return nil, ErrProtocolFormat
 					}
 					//根据redis协议获取 * 后的表述命令数的数值
-					argscount, err := btoi(buf[1 : i-1])
+					argscount, err := btoi(buf[1: i-1])
 					if err != nil || argscount <= 0 {
 						return nil, ErrProtocolParse
 					}
@@ -110,7 +115,7 @@ func (req *RequestCmdReader) ParseCommand() (redisCmds []RedisCmd, err error) {
 										return nil, ErrProtocolFormat
 									}
 									//根据两个边界,截取参数长度
-									blen := buf[argsStart+1 : i-1]
+									blen := buf[argsStart+1: i-1]
 									argLen, err := btoi(blen)
 									if err != nil || argLen <= 0 {
 										//非法长度,返回错误
@@ -124,7 +129,7 @@ func (req *RequestCmdReader) ParseCommand() (redisCmds []RedisCmd, err error) {
 									if buf[i+argLen+2] != '\n' || buf[i+argLen+1] != '\r' {
 										return nil, ErrProtocolEnd
 									}
-									field := buf[i+1 : i+1+argLen]
+									field := buf[i+1: i+1+argLen]
 									cmd.Args = append(cmd.Args, field)
 									i = i + argLen + 3 //指向下一个$符号位置
 									break
